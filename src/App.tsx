@@ -206,7 +206,8 @@ export default function App() {
     
     setIsProcessing(true);
     
-    // Low-DPI for PDF is a mistake, we go full 300 DPI for printing
+    // 300 DPI é o padrão da indústria para impressão de alta qualidade.
+    // Acima disso em navegadores pode causar estouro de memória (OOM).
     const HIGH_DPI = 300;
     const mmToPx = (mm: number) => (mm * HIGH_DPI) / 25.4;
     
@@ -232,15 +233,21 @@ export default function App() {
       orientation: config.orientation,
       unit: 'mm',
       format: config.paperType,
-      compress: true // Enable internal PDF compression
+      compress: true // Ativamos para manter o arquivo final em um tamanho gerenciável
     });
 
     const img = new Image();
     img.src = image;
-    await new Promise(res => img.onload = res);
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
 
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { alpha: false });
+    const ctx = canvas.getContext('2d', { 
+      alpha: false
+    });
+    
     if (!ctx) return;
 
     canvas.width = Math.round(mmToPx(paper.w));
@@ -259,7 +266,6 @@ export default function App() {
         const drawXMinMm = offsetX - paperX;
         const drawYMinMm = offsetY - paperY;
 
-        // Use high-quality scaling
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
 
@@ -271,23 +277,20 @@ export default function App() {
           Math.round(mmToPx(finalHeightMm))
         );
 
-        // Add page info
-        const sheetNum = (r * cols) + c + 1;
-        const pageData = canvas.toDataURL('image/jpeg', 0.98);
+        // JPEG a 1.0 ou 0.95 é muito mais rápido que PNG e mantém qualidade fotográfica
+        const pageData = canvas.toDataURL('image/jpeg', 0.95);
+        
         doc.addImage(pageData, 'JPEG', 0, 0, paper.w, paper.h, undefined, 'FAST');
         
         doc.setFontSize(8);
-        doc.setTextColor(150);
-        doc.text(`Sheet ${sheetNum} (${r + 1},${c + 1})`, 5, paper.h - 5);
+        doc.setTextColor(180);
+        doc.text(`Sheet ${(r * cols) + c + 1} | Grid: ${r + 1},${c + 1} | PosterSlice High Quality`, 5, paper.h - 5);
         
-        // Brief timeout to prevent browser UI freezing on large posters
-        if (rows * cols > 6) {
-          await new Promise(r => setTimeout(r, 10));
-        }
+        await new Promise(r => setTimeout(r, 10));
       }
     }
 
-    doc.save(`poster-slice-${Date.now()}.pdf`);
+    doc.save(`poster-hq-${Date.now()}.pdf`);
     setIsProcessing(false);
   };
 
