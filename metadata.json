@@ -2,5 +2,5 @@
   "name": "PosterSlice",
   "description": "Transform images into giant wall posters by slicing them into multiple A4 sheets for easy printing and assembly.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

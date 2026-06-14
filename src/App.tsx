@@ -36,7 +36,7 @@ export default function App() {
     orientation: 'portrait',
     paperType: 'A4',
     margin: 10, // mm (printing margin)
-    overlap: 5,  // mm (glue overlap)
+    overlap: 0,  // mm (glue overlap)
   });
   const [grid, setGrid] = useState<GridDimensions | null>(null);
   const [pages, setPages] = useState<SlicedImagePage[]>([]);
@@ -55,7 +55,7 @@ export default function App() {
   useEffect(() => {
     setPanOffset({ x: 0, y: 0 });
     setScaleMultiplier(1.0);
-  }, [image, config.sheetCount, config.orientation]);
+  }, [image, config.sheetCount, config.orientation, config.paperType]);
 
   // Consolidated calculations for the poster layout
   const posterLayout = useMemo(() => {
@@ -66,8 +66,8 @@ export default function App() {
     const overlapMm = config.overlap;
 
     // The actual physical span of the assembled poster considering glue overlap
-    const totalWidthMm = paper.w + (cols - 1) * (paper.w - overlapMm);
-    const totalHeightMm = paper.h + (rows - 1) * (paper.h - overlapMm);
+    const totalWidthMm = cols * paper.w - (cols - 1) * overlapMm;
+    const totalHeightMm = rows * paper.h - (rows - 1) * overlapMm;
     
     // Scaling logic: "Cover" by default, then modified by multiplier
     const baseScale = Math.max(totalWidthMm / imageSize.w, totalHeightMm / imageSize.h);
@@ -76,11 +76,11 @@ export default function App() {
     const finalWidthMm = imageSize.w * scale;
     const finalHeightMm = imageSize.h * scale;
 
-    // Base centered offsets
+    // Base centered offsets to fill the space balancedly
     const baseOffsetX = (totalWidthMm - finalWidthMm) / 2;
     const baseOffsetY = (totalHeightMm - finalHeightMm) / 2;
 
-    // Apply manual pan offset
+    // Apply manual pan offset on top of base alignment
     const offsetX = baseOffsetX + panOffset.x;
     const offsetY = baseOffsetY + panOffset.y;
 
@@ -137,8 +137,8 @@ export default function App() {
     
     // Physical assembled aspect ratio calculation
     const getGridRatio = (r: number, c: number) => {
-      const totalWidthMm = paper.w + (c - 1) * (paper.w - overlapMm);
-      const totalHeightMm = paper.h + (r - 1) * (paper.h - overlapMm);
+      const totalWidthMm = c * paper.w - (c - 1) * overlapMm;
+      const totalHeightMm = r * paper.h - (r - 1) * overlapMm;
       return totalWidthMm / totalHeightMm;
     };
 
@@ -214,9 +214,8 @@ export default function App() {
     if (!image || !posterLayout) return;
     
     setIsProcessing(true);
-    
     const { 
-      totalWidthMm, totalHeightMm, finalWidthMm, finalHeightMm, 
+      finalWidthMm, finalHeightMm, 
       offsetX, offsetY, paper, rows, cols, overlapMm 
     } = posterLayout;
 
@@ -229,27 +228,30 @@ export default function App() {
 
     const nativeDpiW = (img.naturalWidth / finalWidthMm) * 25.4;
     const nativeDpiH = (img.naturalHeight / finalHeightMm) * 25.4;
-    const HIGH_DPI = Math.max(300, Math.min(Math.max(nativeDpiW, nativeDpiH), 600));
-    
-    const mmToPx = (mm: number) => (mm * HIGH_DPI) / 25.4;
+    const exportDpi = Math.max(300, Math.min(Math.max(nativeDpiW, nativeDpiH), 600));
+    const pxPerMm = exportDpi / 25.4;
 
     const doc = new jsPDF({
       orientation: config.orientation,
       unit: 'mm',
       format: config.paperType,
-      compress: false // Disable internal compression to keep source quality
+      compress: false
     });
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    canvas.width = Math.round(mmToPx(paper.w));
-    canvas.height = Math.round(mmToPx(paper.h));
+    canvas.width = Math.round(paper.w * pxPerMm);
+    canvas.height = Math.round(paper.h * pxPerMm);
+    
+    // Recalculate precise scale to avoid rounding drift
+    const pxPerMmX = canvas.width / paper.w;
+    const pxPerMmY = canvas.height / paper.h;
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        if (r > 0 || c > 0) doc.addPage();
+        if (r > 0 || c > 0) doc.addPage(config.paperType, config.orientation);
         
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -257,31 +259,24 @@ export default function App() {
         const paperX = c * (paper.w - overlapMm);
         const paperY = r * (paper.h - overlapMm);
 
-        const drawXMinMm = offsetX - paperX;
-        const drawYMinMm = offsetY - paperY;
+        const drawX = (offsetX - paperX) * pxPerMmX;
+        const drawY = (offsetY - paperY) * pxPerMmY;
+        const drawW = finalWidthMm * pxPerMmX;
+        const drawH = finalHeightMm * pxPerMmY;
 
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
 
-        ctx.drawImage(
-          img,
-          Math.round(mmToPx(drawXMinMm)),
-          Math.round(mmToPx(drawYMinMm)),
-          Math.round(mmToPx(finalWidthMm)),
-          Math.round(mmToPx(finalHeightMm))
-        );
+        ctx.drawImage(img, drawX, drawY, drawW, drawH);
 
-        const pageData = canvas.toDataURL('image/jpeg', 1.0);
-        doc.addImage(pageData, 'JPEG', 0, 0, paper.w, paper.h, undefined, 'SLOW');
+        const pageData = canvas.toDataURL('image/jpeg', 0.95);
+        doc.addImage(pageData, 'JPEG', 0, 0, paper.w, paper.h, undefined, 'FAST');
         
-        // Montage Info (A1, A2, B1, B2 style)
         const rowLabel = String.fromCharCode(65 + r);
         const colLabel = c + 1;
-        const sheetNum = (r * cols) + c + 1;
-        
         doc.setFontSize(8);
-        doc.setTextColor(180);
-        doc.text(`${rowLabel}${colLabel}`, 5, paper.h - 5);
+        doc.setTextColor(150);
+        doc.text(`${rowLabel}${colLabel}`, 5, 5);
         
         await new Promise(r => setTimeout(r, 10));
       }
@@ -297,7 +292,7 @@ export default function App() {
     
     setIsProcessing(true);
     const { 
-      totalWidthMm, totalHeightMm, finalWidthMm, finalHeightMm, 
+      finalWidthMm, finalHeightMm, 
       offsetX, offsetY, paper, rows, cols, overlapMm 
     } = posterLayout;
 
@@ -310,17 +305,19 @@ export default function App() {
 
     const nativeDpiW = (img.naturalWidth / finalWidthMm) * 25.4;
     const nativeDpiH = (img.naturalHeight / finalHeightMm) * 25.4;
-    const HIGH_DPI = Math.max(300, Math.min(Math.max(nativeDpiW, nativeDpiH), 600));
-
-    const mmToPx = (mm: number) => (mm * HIGH_DPI) / 25.4;
+    const exportDpi = Math.max(300, Math.min(Math.max(nativeDpiW, nativeDpiH), 600));
+    const pxPerMm = exportDpi / 25.4;
 
     const zip = new JSZip();
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    canvas.width = Math.round(mmToPx(paper.w));
-    canvas.height = Math.round(mmToPx(paper.h));
+    canvas.width = Math.round(paper.w * pxPerMm);
+    canvas.height = Math.round(paper.h * pxPerMm);
+    
+    const pxPerMmX = canvas.width / paper.w;
+    const pxPerMmY = canvas.height / paper.h;
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -330,21 +327,17 @@ export default function App() {
         const paperX = c * (paper.w - overlapMm);
         const paperY = r * (paper.h - overlapMm);
 
-        const drawXMinMm = offsetX - paperX;
-        const drawYMinMm = offsetY - paperY;
+        const drawX = (offsetX - paperX) * pxPerMmX;
+        const drawY = (offsetY - paperY) * pxPerMmY;
+        const drawW = finalWidthMm * pxPerMmX;
+        const drawH = finalHeightMm * pxPerMmY;
 
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
 
-        ctx.drawImage(
-          img,
-          Math.round(mmToPx(drawXMinMm)),
-          Math.round(mmToPx(drawYMinMm)),
-          Math.round(mmToPx(finalWidthMm)),
-          Math.round(mmToPx(finalHeightMm))
-        );
+        ctx.drawImage(img, drawX, drawY, drawW, drawH);
 
-        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(blob => resolve(blob), 'image/jpeg', 1.0));
+        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.95));
         if (blob) {
           const rowLabel = String.fromCharCode(65 + r);
           const colLabel = c + 1;
@@ -365,7 +358,7 @@ export default function App() {
     
     setIsProcessing(true);
     const { 
-      totalWidthMm, totalHeightMm, finalWidthMm, finalHeightMm, 
+      finalWidthMm, finalHeightMm, 
       offsetX, offsetY, paper, rows, cols, overlapMm 
     } = posterLayout;
 
@@ -378,16 +371,18 @@ export default function App() {
 
     const nativeDpiW = (img.naturalWidth / finalWidthMm) * 25.4;
     const nativeDpiH = (img.naturalHeight / finalHeightMm) * 25.4;
-    const HIGH_DPI = Math.max(300, Math.min(Math.max(nativeDpiW, nativeDpiH), 600));
-
-    const mmToPx = (mm: number) => (mm * HIGH_DPI) / 25.4;
+    const exportDpi = Math.max(300, Math.min(Math.max(nativeDpiW, nativeDpiH), 600));
+    const pxPerMm = exportDpi / 25.4;
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    canvas.width = Math.round(mmToPx(paper.w));
-    canvas.height = Math.round(mmToPx(paper.h));
+    canvas.width = Math.round(paper.w * pxPerMm);
+    canvas.height = Math.round(paper.h * pxPerMm);
+    
+    const pxPerMmX = canvas.width / paper.w;
+    const pxPerMmY = canvas.height / paper.h;
 
     const sections = [];
 
@@ -399,21 +394,17 @@ export default function App() {
         const paperX = c * (paper.w - overlapMm);
         const paperY = r * (paper.h - overlapMm);
 
-        const drawXMinMm = offsetX - paperX;
-        const drawYMinMm = offsetY - paperY;
+        const drawX = (offsetX - paperX) * pxPerMmX;
+        const drawY = (offsetY - paperY) * pxPerMmY;
+        const drawW = finalWidthMm * pxPerMmX;
+        const drawH = finalHeightMm * pxPerMmY;
 
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
 
-        ctx.drawImage(
-          img,
-          Math.round(mmToPx(drawXMinMm)),
-          Math.round(mmToPx(drawYMinMm)),
-          Math.round(mmToPx(finalWidthMm)),
-          Math.round(mmToPx(finalHeightMm))
-        );
+        ctx.drawImage(img, drawX, drawY, drawW, drawH);
 
-        const base64Data = canvas.toDataURL('image/jpeg', 1.0).split(',')[1];
+        const base64Data = canvas.toDataURL('image/jpeg', 0.95).split(',')[1];
         const buffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
 
         sections.push({
@@ -433,7 +424,7 @@ export default function App() {
                 new ImageRun({
                   data: buffer,
                   transformation: {
-                    width: paper.w * 36000, // mm to EMU (1mm = 36000 EMU)
+                    width: paper.w * 36000, 
                     height: paper.h * 36000,
                   },
                 } as any),
@@ -650,39 +641,70 @@ export default function App() {
                     aspectRatio: posterLayout ? `${posterLayout.totalWidthMm} / ${posterLayout.totalHeightMm}` : '1'
                   }}
                 >
-                    {/* The full image with overflow visible but dimmed outside the grid */}
+                    {/* Main Background Image - Cleaned up to be purely for context */}
                     <img 
                       src={image} 
                       draggable={false}
-                      className="absolute left-0 top-0 pointer-events-none image-high-quality max-w-none" 
+                      className="absolute left-0 top-0 pointer-events-none image-high-quality max-w-none opacity-20 grayscale blur-[1px]" 
                       style={{
                         width: posterLayout ? `${(posterLayout.finalWidthMm / posterLayout.totalWidthMm) * 100}%` : 'auto',
                         height: posterLayout ? `${(posterLayout.finalHeightMm / posterLayout.totalHeightMm) * 100}%` : 'auto',
                         transform: posterLayout ? `translate(${(posterLayout.offsetX / posterLayout.finalWidthMm) * 100}%, ${(posterLayout.offsetY / posterLayout.finalHeightMm) * 100}%)` : 'none',
                       }}
-                      alt="Poster Visualization" 
+                      alt="" 
                     />
                     
                     {/* Dim layer for everything outside the paper grid */}
                     <div className="absolute -inset-[10000px] pointer-events-none border-[10000px] border-slate-900/40 z-[10]" />
                     
-                    {/* Grid Overlay */}
+                    {/* Grid Overlay with individual sheets for pixel-perfect preview */}
                     <div 
-                      className="absolute inset-0 grid pointer-events-none z-[20]" 
-                      style={{ 
-                        gridTemplateColumns: `repeat(${grid?.cols || 1}, 1fr)`,
-                        gridTemplateRows: `repeat(${grid?.rows || 1}, 1fr)`
-                      }}
+                      className="absolute inset-0 pointer-events-none z-[20]" 
                     >
-                      {Array.from({ length: (grid?.rows || 0) * (grid?.cols || 0) }).map((_, i) => {
-                        const r = Math.floor(i / (grid?.cols || 1));
-                        const c = i % (grid?.cols || 1);
+                      {posterLayout && Array.from({ length: posterLayout.rows * posterLayout.cols }).map((_, i) => {
+                        const r = Math.floor(i / posterLayout.cols);
+                        const c = i % posterLayout.cols;
+                        const paperX = c * (posterLayout.paper.w - posterLayout.overlapMm);
+                        const paperY = r * (posterLayout.paper.h - posterLayout.overlapMm);
+                        
                         return (
-                          <div key={i} className="border border-brand-accent/40 border-dashed flex items-start p-1.5 sm:p-2">
-                            <span className="text-[10px] sm:text-xs font-black text-brand-accent bg-white/95 px-1.5 py-0.5 rounded shadow-sm ring-1 ring-brand-accent/20">
-                              {String.fromCharCode(65 + r)}{ c + 1 }
-                            </span>
-                          </div>
+                          <motion.div 
+                            key={i}
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className="absolute bg-white overflow-hidden border border-brand-accent/20 shadow-sm shadow-black/5"
+                            style={{ 
+                              width: `${(posterLayout.paper.w / posterLayout.totalWidthMm) * 100}%`,
+                              height: `${(posterLayout.paper.h / posterLayout.totalHeightMm) * 100}%`,
+                              left: `${(paperX / posterLayout.totalWidthMm) * 100}%`,
+                              top: `${(paperY / posterLayout.totalHeightMm) * 100}%`,
+                              zIndex: i + 1
+                            }}
+                          >
+                            {/* The image inside the page, positioned exactly like in the PDF */}
+                            <img 
+                              src={image} 
+                              draggable={false}
+                              className="absolute left-0 top-0 pointer-events-none image-high-quality max-w-none origin-top-left" 
+                              style={{
+                                width: `${(posterLayout.finalWidthMm / posterLayout.paper.w) * 100}%`,
+                                height: `${(posterLayout.finalHeightMm / posterLayout.paper.h) * 100}%`,
+                                transform: `translate(${( (posterLayout.offsetX - paperX) / posterLayout.finalWidthMm) * 100}%, ${( (posterLayout.offsetY - paperY) / posterLayout.finalHeightMm) * 100}%)`,
+                                opacity: 1
+                              }}
+                              alt="" 
+                            />
+
+                            {/* Label Overlay */}
+                            <div className="absolute top-1.5 left-1.5 sm:top-2 sm:left-2 z-[30]">
+                              <span className="text-[10px] sm:text-xs font-black text-brand-accent bg-white/95 px-1.5 py-0.5 rounded shadow-sm ring-1 ring-brand-accent/20">
+                                {String.fromCharCode(65 + r)}{ c + 1 }
+                              </span>
+                            </div>
+
+                            {/* Corner Cut Guides (Visual only) */}
+                            <div className="absolute inset-0 border border-brand-accent/10 border-dashed pointer-events-none" />
+                          </motion.div>
                         );
                       })}
                     </div>
@@ -696,7 +718,7 @@ export default function App() {
               </div>
               <div className="text-[10px] leading-tight">
                 <p className="font-bold text-brand-text">Dica para Professor(a)</p>
-                <p>O PDF segue a divisão acima. Use as marcas (A1, B2...) para montar o painel.</p>
+                <p>A prévia acima reflete exatamente o PDF. As folhas se encaixam usando a sobreposição configurada.</p>
               </div>
             </div>
           </div>
