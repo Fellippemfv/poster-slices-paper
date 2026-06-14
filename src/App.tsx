@@ -13,10 +13,15 @@ import {
   Maximize2,
   Minimize2,
   Trash2,
-  Printer
+  Printer,
+  FileImage,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
+import { Document, Packer, Paragraph, ImageRun, PageOrientation } from 'docx';
 import { Orientation, PosterConfig, GridDimensions, SlicedImagePage } from './types';
 
 // Constants for A4 dimensions in mm
@@ -36,6 +41,7 @@ export default function App() {
   const [grid, setGrid] = useState<GridDimensions | null>(null);
   const [pages, setPages] = useState<SlicedImagePage[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
   const [scaleMultiplier, setScaleMultiplier] = useState(1.0);
 
@@ -280,6 +286,164 @@ export default function App() {
 
     doc.save(`poster-hq-${Date.now()}.pdf`);
     setIsProcessing(false);
+    setIsDownloadModalOpen(false);
+  };
+
+  const generateImages = async () => {
+    if (!image || !posterLayout) return;
+    
+    setIsProcessing(true);
+    const { 
+      totalWidthMm, totalHeightMm, finalWidthMm, finalHeightMm, 
+      offsetX, offsetY, paper, rows, cols, overlapMm 
+    } = posterLayout;
+
+    const HIGH_DPI = 300;
+    const mmToPx = (mm: number) => (mm * HIGH_DPI) / 25.4;
+
+    const img = new Image();
+    img.src = image;
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+
+    const zip = new JSZip();
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return;
+
+    canvas.width = Math.round(mmToPx(paper.w));
+    canvas.height = Math.round(mmToPx(paper.h));
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const paperX = c * (paper.w - overlapMm);
+        const paperY = r * (paper.h - overlapMm);
+
+        const drawXMinMm = offsetX - paperX;
+        const drawYMinMm = offsetY - paperY;
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        ctx.drawImage(
+          img,
+          Math.round(mmToPx(drawXMinMm)),
+          Math.round(mmToPx(drawYMinMm)),
+          Math.round(mmToPx(finalWidthMm)),
+          Math.round(mmToPx(finalHeightMm))
+        );
+
+        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.95));
+        if (blob) {
+          const rowLabel = String.fromCharCode(65 + r);
+          const colLabel = c + 1;
+          zip.file(`poster_parte_${rowLabel}${colLabel}.jpg`, blob);
+        }
+        await new Promise(r => setTimeout(r, 10));
+      }
+    }
+
+    const content = await zip.generateAsync({ type: 'blob' });
+    saveAs(content, `poster-imagens-${Date.now()}.zip`);
+    setIsProcessing(false);
+    setIsDownloadModalOpen(false);
+  };
+
+  const generateDocx = async () => {
+    if (!image || !posterLayout) return;
+    
+    setIsProcessing(true);
+    const { 
+      totalWidthMm, totalHeightMm, finalWidthMm, finalHeightMm, 
+      offsetX, offsetY, paper, rows, cols, overlapMm 
+    } = posterLayout;
+
+    const HIGH_DPI = 300;
+    const mmToPx = (mm: number) => (mm * HIGH_DPI) / 25.4;
+
+    const img = new Image();
+    img.src = image;
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return;
+
+    canvas.width = Math.round(mmToPx(paper.w));
+    canvas.height = Math.round(mmToPx(paper.h));
+
+    const sections = [];
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const paperX = c * (paper.w - overlapMm);
+        const paperY = r * (paper.h - overlapMm);
+
+        const drawXMinMm = offsetX - paperX;
+        const drawYMinMm = offsetY - paperY;
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
+        ctx.drawImage(
+          img,
+          Math.round(mmToPx(drawXMinMm)),
+          Math.round(mmToPx(drawYMinMm)),
+          Math.round(mmToPx(finalWidthMm)),
+          Math.round(mmToPx(finalHeightMm))
+        );
+
+        const base64Data = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+        const buffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+
+        sections.push({
+          properties: {
+            page: {
+              size: {
+                width: `${paper.w}mm`,
+                height: `${paper.h}mm`,
+              },
+              margin: { top: 0, right: 0, bottom: 0, left: 0 },
+              orientation: config.orientation === 'portrait' ? PageOrientation.PORTRAIT : PageOrientation.LANDSCAPE,
+            },
+          },
+          children: [
+            new Paragraph({
+              children: [
+                new ImageRun({
+                  data: buffer,
+                  transformation: {
+                    width: paper.w * 36000, // mm to EMU (1mm = 36000 EMU)
+                    height: paper.h * 36000,
+                  },
+                } as any),
+              ],
+            }),
+          ],
+        });
+        await new Promise(r => setTimeout(r, 10));
+      }
+    }
+
+    const doc = new Document({
+      sections: sections
+    });
+
+    const blob = await Packer.toBlob(doc);
+    saveAs(blob, `poster-word-${Date.now()}.docx`);
+    setIsProcessing(false);
+    setIsDownloadModalOpen(false);
   };
 
   return (
@@ -402,10 +566,10 @@ export default function App() {
         <div className="mt-auto pt-4">
           <button
             disabled={!image || isProcessing}
-            onClick={generatePDF}
+            onClick={() => setIsDownloadModalOpen(true)}
             className="w-full h-10 bg-brand-accent text-white rounded-lg font-bold flex items-center justify-center gap-2 shadow-lg shadow-brand-accent/20 hover:bg-brand-accent-hover active:scale-[0.98] transition-all disabled:opacity-50 disabled:grayscale disabled:cursor-not-allowed text-sm cursor-pointer"
           >
-            {isProcessing ? 'Processando...' : <><Download className="w-3.5 h-3.5 stroke-[2.5]" /> Gerar PDF</>}
+            <Download className="w-3.5 h-3.5 stroke-[2.5]" /> Baixar
           </button>
         </div>
       </aside>
@@ -529,6 +693,93 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* Download Selection Modal */}
+      <AnimatePresence>
+        {isDownloadModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsDownloadModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm cursor-pointer"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden border border-brand-border"
+            >
+              <div className="p-5 border-b border-brand-border flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-brand-text">Baixar Pôster</h3>
+                  <p className="text-[10px] text-brand-muted uppercase font-bold tracking-wider">Escolha o formato</p>
+                </div>
+                <button 
+                  onClick={() => setIsDownloadModalOpen(false)}
+                  className="p-1.5 hover:bg-slate-100 rounded-full transition-colors"
+                >
+                  <X className="w-4 h-4 text-brand-muted" />
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3">
+                <button
+                  disabled={isProcessing}
+                  onClick={generatePDF}
+                  className="w-full flex items-center gap-4 p-3 rounded-xl border border-brand-border hover:border-brand-accent hover:bg-indigo-50 transition-all group group-disabled:opacity-50 cursor-pointer"
+                >
+                  <div className="w-10 h-10 bg-red-50 rounded-lg flex items-center justify-center text-red-500 group-hover:scale-110 transition-transform">
+                    <FileText className="w-6 h-6" />
+                  </div>
+                  <div className="text-left">
+                    <p className="font-bold text-brand-text text-sm">Documento PDF</p>
+                    <p className="text-[11px] text-brand-muted">Recomendado para impressão facial</p>
+                  </div>
+                </button>
+
+                <button
+                  disabled={isProcessing}
+                  onClick={generateImages}
+                  className="w-full flex items-center gap-4 p-3 rounded-xl border border-brand-border hover:border-brand-accent hover:bg-indigo-50 transition-all group group-disabled:opacity-50 cursor-pointer"
+                >
+                  <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center text-blue-500 group-hover:scale-110 transition-transform">
+                    <FileImage className="w-6 h-6" />
+                  </div>
+                  <div className="text-left">
+                    <p className="font-bold text-brand-text text-sm">Imagens (ZIP)</p>
+                    <p className="text-[11px] text-brand-muted">Arquivos JPG individuais para cada folha</p>
+                  </div>
+                </button>
+
+                <button
+                  disabled={isProcessing}
+                  onClick={generateDocx}
+                  className="w-full flex items-center gap-4 p-3 rounded-xl border border-brand-border hover:border-brand-accent hover:bg-indigo-50 transition-all group group-disabled:opacity-50 cursor-pointer"
+                >
+                  <div className="w-10 h-10 bg-indigo-50 rounded-lg flex items-center justify-center text-brand-accent group-hover:scale-110 transition-transform">
+                    <Printer className="w-6 h-6" />
+                  </div>
+                  <div className="text-left">
+                    <p className="font-bold text-brand-text text-sm">Arquivo Word (DOCX)</p>
+                    <p className="text-[11px] text-brand-muted">Uma folha por página no Word</p>
+                  </div>
+                </button>
+              </div>
+
+              {isProcessing && (
+                <div className="px-4 pb-4">
+                  <div className="bg-brand-accent/10 rounded-lg p-3 flex items-center gap-3">
+                    <div className="w-4 h-4 border-2 border-brand-accent border-t-transparent rounded-full animate-spin" />
+                    <p className="text-xs font-bold text-brand-accent italic">Processando alta qualidade...</p>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
