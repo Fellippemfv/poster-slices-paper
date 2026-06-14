@@ -116,6 +116,8 @@ export default function App() {
       img.src = dataUrl;
     };
     reader.readAsDataURL(file);
+    // Reset file input value so the same file can be uploaded again
+    e.target.value = '';
   };
 
   // Automatically calculate the best grid based on image ratio and sheet count
