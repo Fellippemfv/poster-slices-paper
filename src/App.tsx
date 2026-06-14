@@ -220,21 +220,24 @@ export default function App() {
       offsetX, offsetY, paper, rows, cols, overlapMm 
     } = posterLayout;
 
-    const HIGH_DPI = 300;
+    const img = new Image();
+    img.src = image;
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+
+    const nativeDpiW = (img.naturalWidth / finalWidthMm) * 25.4;
+    const nativeDpiH = (img.naturalHeight / finalHeightMm) * 25.4;
+    const HIGH_DPI = Math.max(300, Math.min(Math.max(nativeDpiW, nativeDpiH), 600));
+    
     const mmToPx = (mm: number) => (mm * HIGH_DPI) / 25.4;
 
     const doc = new jsPDF({
       orientation: config.orientation,
       unit: 'mm',
       format: config.paperType,
-      compress: true
-    });
-
-    const img = new Image();
-    img.src = image;
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = reject;
+      compress: false // Disable internal compression to keep source quality
     });
 
     const canvas = document.createElement('canvas');
@@ -268,8 +271,8 @@ export default function App() {
           Math.round(mmToPx(finalHeightMm))
         );
 
-        const pageData = canvas.toDataURL('image/jpeg', 0.95);
-        doc.addImage(pageData, 'JPEG', 0, 0, paper.w, paper.h, undefined, 'FAST');
+        const pageData = canvas.toDataURL('image/jpeg', 1.0);
+        doc.addImage(pageData, 'JPEG', 0, 0, paper.w, paper.h, undefined, 'SLOW');
         
         // Montage Info (A1, A2, B1, B2 style)
         const rowLabel = String.fromCharCode(65 + r);
@@ -298,15 +301,18 @@ export default function App() {
       offsetX, offsetY, paper, rows, cols, overlapMm 
     } = posterLayout;
 
-    const HIGH_DPI = 300;
-    const mmToPx = (mm: number) => (mm * HIGH_DPI) / 25.4;
-
     const img = new Image();
     img.src = image;
     await new Promise((resolve, reject) => {
       img.onload = resolve;
       img.onerror = reject;
     });
+
+    const nativeDpiW = (img.naturalWidth / finalWidthMm) * 25.4;
+    const nativeDpiH = (img.naturalHeight / finalHeightMm) * 25.4;
+    const HIGH_DPI = Math.max(300, Math.min(Math.max(nativeDpiW, nativeDpiH), 600));
+
+    const mmToPx = (mm: number) => (mm * HIGH_DPI) / 25.4;
 
     const zip = new JSZip();
     const canvas = document.createElement('canvas');
@@ -338,7 +344,7 @@ export default function App() {
           Math.round(mmToPx(finalHeightMm))
         );
 
-        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(blob => resolve(blob), 'image/jpeg', 0.95));
+        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(blob => resolve(blob), 'image/jpeg', 1.0));
         if (blob) {
           const rowLabel = String.fromCharCode(65 + r);
           const colLabel = c + 1;
@@ -363,15 +369,18 @@ export default function App() {
       offsetX, offsetY, paper, rows, cols, overlapMm 
     } = posterLayout;
 
-    const HIGH_DPI = 300;
-    const mmToPx = (mm: number) => (mm * HIGH_DPI) / 25.4;
-
     const img = new Image();
     img.src = image;
     await new Promise((resolve, reject) => {
       img.onload = resolve;
       img.onerror = reject;
     });
+
+    const nativeDpiW = (img.naturalWidth / finalWidthMm) * 25.4;
+    const nativeDpiH = (img.naturalHeight / finalHeightMm) * 25.4;
+    const HIGH_DPI = Math.max(300, Math.min(Math.max(nativeDpiW, nativeDpiH), 600));
+
+    const mmToPx = (mm: number) => (mm * HIGH_DPI) / 25.4;
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { alpha: false });
@@ -404,7 +413,7 @@ export default function App() {
           Math.round(mmToPx(finalHeightMm))
         );
 
-        const base64Data = canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+        const base64Data = canvas.toDataURL('image/jpeg', 1.0).split(',')[1];
         const buffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
 
         sections.push({
@@ -593,7 +602,7 @@ export default function App() {
                 </p>
               </div>
               <div className="bg-white text-brand-accent px-3 py-1 rounded-full text-[11px] font-bold ring-1 ring-brand-accent/20 shadow-sm">
-                Qualidade: 300 DPI
+                Qualidade Máxima
               </div>
             </div>
 
@@ -645,11 +654,11 @@ export default function App() {
                     <img 
                       src={image} 
                       draggable={false}
-                      className="absolute pointer-events-none image-high-quality max-w-none origin-center" 
+                      className="absolute left-0 top-0 pointer-events-none image-high-quality max-w-none" 
                       style={{
                         width: posterLayout ? `${(posterLayout.finalWidthMm / posterLayout.totalWidthMm) * 100}%` : 'auto',
                         height: posterLayout ? `${(posterLayout.finalHeightMm / posterLayout.totalHeightMm) * 100}%` : 'auto',
-                        transform: posterLayout ? `translate(${((posterLayout.offsetX - (posterLayout.totalWidthMm - posterLayout.finalWidthMm)/2) / posterLayout.finalWidthMm) * 100}%, ${((posterLayout.offsetY - (posterLayout.totalHeightMm - posterLayout.finalHeightMm)/2) / posterLayout.finalHeightMm) * 100}%)` : 'none',
+                        transform: posterLayout ? `translate(${(posterLayout.offsetX / posterLayout.finalWidthMm) * 100}%, ${(posterLayout.offsetY / posterLayout.finalHeightMm) * 100}%)` : 'none',
                       }}
                       alt="Poster Visualization" 
                     />
